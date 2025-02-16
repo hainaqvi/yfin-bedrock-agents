@@ -1,0 +1,18 @@
+{
+  "sessionId": "123456789012345",
+    "sessionAttributes": {},
+    "inputText": "Best pergforming mutual funds",
+    "promptSessionAttributes": {},
+    "apiPath": "/mf_best_performing",
+    "agent": {
+      "name": "yfAgent",
+      "version": "DRAFT",
+      "id": "XLHH72XNF2",
+      "alias": "TSTALIASID"
+    },
+    "httpMethod": "GET",
+    "messageVersion": "1.0",
+    "actionGroup": "StockInfo"
+
+  }
+  

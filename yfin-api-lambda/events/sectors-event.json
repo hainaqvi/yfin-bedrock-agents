@@ -1,0 +1,18 @@
+{
+  "sessionId": "123456789012345",
+    "sessionAttributes": {},
+    "inputText": "What are different sectors?",
+    "promptSessionAttributes": {},
+    "apiPath": "/sectors",
+    "agent": {
+      "name": "yfAgent",
+      "version": "DRAFT",
+      "id": "XLHH72XNF2",
+      "alias": "TSTALIASID"
+    },
+    "httpMethod": "GET",
+    "messageVersion": "1.0",
+    "actionGroup": "StockInfo"
+
+  }
+  

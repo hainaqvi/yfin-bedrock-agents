@@ -1,0 +1,1411 @@
+Conditions:
+  IsWS: !Equals 
+    - !Ref IsWorkshopStudioEnv
+    - "yes"
+  ShouldCreateIDC:
+    !Equals [ !Ref IDCInstanceArn, "" ]
+  IfCreateQApp: !Equals 
+    - !Ref CreateQApp
+    - "yes"
+
+
+Resources:
+  IDCLambdaExecutionRole:
+      Type: AWS::IAM::Role
+      Condition: ShouldCreateIDC
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - lambda.amazonaws.com
+              Action:
+                - 'sts:AssumeRole'
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Policies:
+          - PolicyName: SSOAdminPolicy
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - sso:CreateInstance
+                    - sso:DescribeInstance
+                    - sso:ListInstances
+                    - iam:CreateServiceLinkedRole
+                    - identitystore:CreateGroup
+                    - identitystore:CreateGroupMembership
+                    - identitystore:CreateUser
+                  Resource:
+                    - '*'
+
+  IDCLambda:
+    Type: AWS::Lambda::Function
+    Condition: ShouldCreateIDC
+    Properties:
+      Handler: index.handler
+      Runtime: python3.10
+      Timeout: 300
+      Description: Create IDC Local Instance
+      Role: !GetAtt IDCLambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import time
+          import boto3
+          import cfnresponse
+
+          sso_client = boto3.client('sso-admin')
+          id_store_client = boto3.client('identitystore')
+
+          GROUPS = ["ML_SME_SA", "SA", "DB_SME_SA", "Admins", "AllUsers"]
+          USERS = [
+              {
+                  "user_name": "martha_rivera",
+                  "email": "martha_rivera@example.com",
+                  "display_name": "Martha Rivera",
+                  "given_name": "Martha",
+                  "last_name": "Rivera",
+                  "groups": ["Admins", "AllUsers"]  
+              },
+              {
+                  "user_name": "pat_candella",
+                  "email": "pat_candella@example.com",
+                  "display_name": "Pat Candella",
+                  "given_name": "Pat",
+                  "last_name": "Candella",
+                  "groups": ["SA", "AllUsers"]  
+              },
+              {
+                  "user_name": "mateo_jackson",
+                  "email": "mateo_jackson@example.com",
+                  "display_name": "Mateo Jackson",
+                  "given_name": "Mateo",
+                  "last_name": "Jackson",
+                  "groups": ["DB_SME_SA", "AllUsers"]  
+              },
+              {
+                  "user_name": "john_doe",
+                  "email": "john_doe@example.com",
+                  "display_name": "John Doe",
+                  "given_name": "John",
+                  "last_name": "Doe",
+                  "groups": ["ML_SME_SA", "AllUsers"]  
+              },
+              {
+                  "user_name": "mary_major",
+                  "email": "mary_major@example.com",
+                  "display_name": "Mary Major",
+                  "given_name": "Mary",
+                  "last_name": "Major",
+                  "groups": ["AllUsers"]  
+              }
+          ]
+
+          def handler(event, context):
+              try:
+                  print('Received event: ' + json.dumps(event, indent=4, default=str))
+                  if event['RequestType'] == 'Create':
+                      print("Check for existing IDC Instance")
+                      list_inst_response = sso_client.list_instances()
+                      if list_inst_response["Instances"]:
+                          print("IDC Instance exists. Skipping creation")
+                          instance_arn = list_inst_response["Instances"][0]['InstanceArn']
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {'InstanceArn': instance_arn}, instance_arn)
+                          return
+                      print("Creating IDC Instance")
+                      create_response = sso_client.create_instance()
+                      instance_arn = create_response['InstanceArn']
+                      identity_store_id = None
+                      for idx in range(10):
+                          instance_dsec = sso_client.describe_instance(InstanceArn=instance_arn)
+                          print("IDC Instance:" + json.dumps(instance_dsec, indent=4, default=str))
+                          if instance_dsec['Status'] != "ACTIVE":
+                              time.sleep(10)
+                          else:
+                              identity_store_id = instance_dsec['IdentityStoreId']
+                              break
+                      if identity_store_id:
+                          group_idx = {}
+                          for group in GROUPS:
+                              resp = id_store_client.create_group(
+                                  IdentityStoreId=identity_store_id,
+                                  DisplayName=group,
+                                  Description=group
+                              )
+                              print("Group Creation:" + json.dumps(resp, indent=4, default=str))
+                              group_idx[group] = resp["GroupId"]
+                          for user in USERS:
+                              user_resp = id_store_client.create_user(
+                                  IdentityStoreId=identity_store_id,
+                                  UserName=user["user_name"],
+                                  DisplayName=user["display_name"],
+                                  Emails=[{"Value": user["email"], "Type": "Work", "Primary": True}],
+                                  Name={"GivenName": user["given_name"], "FamilyName": user["last_name"]}
+                              )
+                              print("User Creation:" + json.dumps(user_resp, indent=4, default=str))
+                              # Assign groups
+                              for grp in user["groups"]:
+                                  if grp in group_idx:
+                                      member_resp = id_store_client.create_group_membership(
+                                          IdentityStoreId=identity_store_id,
+                                          GroupId=group_idx[grp],
+                                          MemberId={"UserId": user_resp["UserId"]}
+                                      )
+                                      print("Group Member Creation:" + json.dumps(member_resp, indent=4, default=str))
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {'InstanceArn': instance_arn}, instance_arn)
+                  # elif event['RequestType'] == 'Delete':
+                  #     sso_client.delete_instance(InstanceArn=event['PhysicalResourceId'])
+                  #     cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, event['PhysicalResourceId'])
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  print("done")
+              except Exception as e:
+                  print(e)
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {})
+
+  IDCInstance:
+    Type: AWS::CloudFormation::CustomResource
+    Condition: ShouldCreateIDC
+    Properties:
+      ServiceToken: !GetAtt IDCLambda.Arn
+
+ 
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+          BlockPublicAcls: Yes
+          BlockPublicPolicy: Yes
+          IgnorePublicAcls: Yes
+          RestrictPublicBuckets: Yes
+
+  QBusinessApp:
+    Type: AWS::QBusiness::Application
+    Condition: IfCreateQApp
+    Properties:
+      DisplayName: wealth-mgmt-app
+      Description: qbusiness demo app
+      IdentityType: AWS_IAM_IDC
+      IdentityCenterInstanceArn: !If
+      - ShouldCreateIDC
+      - !GetAtt IDCInstance.InstanceArn  # Use the created instance
+      - !Ref IDCInstanceArn      # Use the provided ARN if it exists    
+      AutoSubscriptionConfiguration:
+        AutoSubscribe: ENABLED
+        DefaultSubscriptionType: Q_BUSINESS
+
+  QBusinessIndex:
+    Type: AWS::QBusiness::Index
+    Condition: IfCreateQApp
+    Properties:
+      ApplicationId: !Ref QBusinessApp
+      CapacityConfiguration: 
+         Units: 1
+      Description: "Index for wealth management application"
+      DisplayName: "WealthMgmtIndex"
+      Type: "ENTERPRISE"
+  RetrieverRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: qbusiness.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: QBusinessRetrieverAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - qbusiness:GetIndex
+                  - qbusiness:SearchIndex
+                #Resource: !Sub 'arn:aws:qbusiness:${AWS::Region}:${AWS::AccountId}:application/${QBusinessApp}/index/${QBusinessIndex.IndexId}'
+                Resource: '*'
+  QBusinessRetriever:
+    Type: AWS::QBusiness::Retriever
+    Condition: IfCreateQApp
+    Properties:
+      ApplicationId: !Ref QBusinessApp
+      DisplayName: "wealth-mgmt-retriever"
+      Type: NATIVE_INDEX
+      Configuration: 
+        NativeIndexConfiguration:
+          IndexId: !GetAtt QBusinessIndex.IndexId
+      RoleArn: !GetAtt RetrieverRole.Arn
+
+  QBusinessDataSource:
+      Type: AWS::QBusiness::DataSource
+      DependsOn: QBusinessRetriever
+      Condition: IfCreateQApp
+      Properties:
+        ApplicationId: !Ref QBusinessApp
+        IndexId: !GetAtt QBusinessIndex.IndexId
+        DisplayName: "wealth-mgmt-ds"
+        Description: "Wealth Management data source"
+        RoleArn: !GetAtt DataSourceRole.Arn
+        # Add other properties as needed
+        Configuration:
+          type: "S3"
+          syncMode: "FULL_CRAWL"
+          connectionConfiguration:
+            repositoryEndpointMetadata:
+              BucketName: !Ref S3Bucket
+          repositoryConfigurations:
+            document:
+              fieldMappings:
+                - dataSourceFieldName: "s3_document_id"
+                  indexFieldName: "s3_document_id"
+                  indexFieldType: "STRING"
+          additionalProperties:
+            maxFileSizeInMegaBytes: "50"
+            exclusionPatterns:
+              - "post-extraction/**"
+              - "pre-extraction/**"
+            inclusionPatterns:
+              - "**.{pdf,txt}"     
+
+  QsyncLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: QBusinessAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - qbusiness:StartDataSourceSyncJob
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: '*'
+
+  StartDataSourceSyncFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.8
+      Handler: index.handler
+      Role: !GetAtt QsyncLambdaExecutionRole.Arn
+      Timeout: 900  # Increased to 15 minutes (maximum Lambda timeout)
+      MemorySize: 1024  # Increased memory for faster processing
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import zipfile
+          import io
+          import os
+          
+          def handler(event, context):
+            qbusiness = boto3.client('qbusiness')
+            s3_client = boto3.client('s3')
+            
+            try:
+              print(f"Received event: {event}")
+              # Check if all required properties are present
+              required_props = ['S3Bucket', 'ApplicationId', 'IndexId', 'DataSourceId']
+              for prop in required_props:
+                  if prop not in event.get('ResourceProperties', {}):
+                      raise ValueError(f"Missing required property: {prop}")
+              
+              # Unzip and copy content
+              source_bucket = 'ws-assets-prod-iad-r-nrt-2cb4b4649d0e0f94'
+              source_key = '8e7f13d3-ab0e-4f24-a442-7af9ccd12e2d/config/wm-content.zip'
+              destination_bucket = event['ResourceProperties']['S3Bucket']
+              destination_prefix = 'wm-content/'
+              
+              print(f"Downloading zip from {source_bucket}/{source_key}")
+              # Download the zip file from S3
+              zip_obj = s3_client.get_object(Bucket=source_bucket, Key=source_key)
+              buffer = io.BytesIO(zip_obj['Body'].read())
+              
+              print("Unzipping and uploading files")
+              # Unzip the file
+              with zipfile.ZipFile(buffer) as zip_file:
+                  for file_name in zip_file.namelist():
+                      file_content = zip_file.read(file_name)
+                      
+                      # Upload each file to the destination bucket
+                      destination_key = os.path.join(destination_prefix, file_name)
+                      s3_client.put_object(Bucket=destination_bucket, Key=destination_key, Body=file_content)
+                      print(f"Uploaded {destination_key}")
+              print("Starting data source sync job")
+              # Start data source sync job
+              qbusiness.start_data_source_sync_job(
+                applicationId=event['ResourceProperties']['ApplicationId'],
+                indexId=event['ResourceProperties']['IndexId'],
+                dataSourceId=event['ResourceProperties']['DataSourceId']
+              )
+              print("Data source sync job started successfully----") 
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                "Message": "Successfully unzipped content and started data source sync job"
+              })
+            except Exception as e:
+              print(f"Error: {str(e)}")
+              cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
+
+  StartDataSourceSync:
+    Type: Custom::StartDataSourceSync
+    DependsOn: QBusinessDataSource
+    Properties:
+      ServiceToken: !GetAtt StartDataSourceSyncFunction.Arn
+      ApplicationId: !Ref QBusinessApp
+      IndexId: !GetAtt QBusinessIndex.IndexId
+      DataSourceId: !GetAtt QBusinessDataSource.DataSourceId
+      S3Bucket: !Ref S3Bucket
+
+  QWebExperience:
+    Type: AWS::QBusiness::WebExperience
+    Condition: IfCreateQApp
+    Properties:
+      ApplicationId: !Ref QBusinessApp
+      Title: Agent Ops App
+      RoleArn: !GetAtt WebExperienceRole.Arn
+
+  YFinAgentPlugin:
+    Type: 'AWS::QBusiness::Plugin'
+    DependsOn: QBusinessApp
+    Properties:
+      ApplicationId: !GetAtt QBusinessApp.ApplicationId
+      DisplayName: 'yfinAgent'
+      Type: 'CUSTOM'
+      Description: 'This agent is used by Financial advisors to provide comprehensive market insights across various investment domains, including stocks, ETFs, cryptocurrencies, bonds, futures, and market sectors.'
+      ApiSchema:
+        S3:
+          Bucket: 'ws-assets-prod-iad-r-pdx-f3b3f9f1a7d6a3d0'
+          Key: 'd4acefc0-414b-41e6-981c-56c3da77d760/yfin-agent-openapi.json'
+          Region: 'us-west-2'
+  DataSourceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: 
+                - qbusiness.amazonaws.com
+            Action: 'sts:AssumeRole'
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref AWS::AccountId
+              ArnLike:
+                "aws:SourceArn": !Sub "arn:aws:qbusiness:${AWS::Region}:${AWS::AccountId}:application/*"
+      Policies:
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                Resource: !Sub                
+                  - 'arn:aws:s3:::${bucket}/*'
+                  - bucket: !Ref S3Bucket
+              - Effect: Allow
+                Action:
+                  - 's3:ListBucket'
+                Resource: !Sub                
+                  - 'arn:aws:s3:::${bucket}'
+                  - bucket: !Ref S3Bucket
+              - Effect: Allow
+                Action:
+                  - 'qbusiness:BatchPutDocument'
+                  - 'qbusiness:BatchDeleteDocument'
+                  - 'qbusiness:PutGroup'
+                  - 'qbusiness:CreateUser'
+                  - 'qbusiness:DeleteGroup'
+                  - 'qbusiness:UpdateUser'
+                  - 'qbusiness:ListGroups'
+                  - 'qbusiness:CreateDataSource'
+                  - 'qbusiness:UpdateDataSource'
+                  - 'qbusiness:DeleteDataSource'
+                  - 'qbusiness:ListDataSources'
+                Resource: 
+                  - !Sub "arn:aws:qbusiness:${AWS::Region}:${AWS::AccountId}:application/*"
+                  - !Sub "arn:aws:qbusiness:${AWS::Region}:${AWS::AccountId}:application/*/index/*"
+                  - !Sub "arn:aws:qbusiness:${AWS::Region}:${AWS::AccountId}:application/*/index/*/data-source/*"
+              - Effect: Allow
+                Action:
+                  - 'secretsmanager:GetSecretValue'
+                Resource: 
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:secret_id"
+              - Effect: Allow
+                Action:
+                  - 'kms:Decrypt'
+                Resource: 
+                  - !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/key_id"
+          PolicyName: DataSourcePolicy
+
+  WebExperienceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: application.qbusiness.amazonaws.com
+            Action: 
+              - 'sts:AssumeRole'
+              - 'sts:SetContext'
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref AWS::AccountId
+              ArnLike:
+                "aws:SourceArn": !Sub "arn:aws:qbusiness:${AWS::Region}:${AWS::AccountId}:application/*"
+      Policies:
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'qbusiness:Chat'
+                  - 'qbusiness:ChatSync'
+                  - 'qbusiness:ListMessages'
+                  - 'qbusiness:ListConversations'
+                  - 'qbusiness:DeleteConversation'
+                  - 'qbusiness:PutFeedback'
+                  - 'qbusiness:GetWebExperience'
+                  - 'qbusiness:GetApplication'
+                  - 'qbusiness:ListPlugins'
+                  - 'qbusiness:GetChatControlsConfiguration'
+                  - 'qbusiness:ListCategories'
+                  - 'qbusiness:ListRetrievers'
+                  - 'qapps:CreateQApp'
+                  - 'qapps:PredictProblemStatementFromConversation'
+                  - 'qapps:PredictQAppFromProblemStatement'
+                  - 'qapps:CopyQApp'
+                  - 'qapps:GetQApp'
+                  - 'qapps:ListQApps'
+                  - 'qapps:UpdateQApp'
+                  - 'qapps:DeleteQApp'
+                  - 'qapps:AssociateQAppWithUser'
+                  - 'qapps:DisassociateQAppFromUser'
+                  - 'qapps:ImportDocumentToQApp'
+                  - 'qapps:ImportDocumentToQAppSession'
+                  - 'qapps:CreateLibraryItem'
+                  - 'qapps:GetLibraryItem'
+                  - 'qapps:UpdateLibraryItem'
+                  - 'qapps:CreateLibraryItemReview'
+                  - 'qapps:ListLibraryItems'
+                  - 'qapps:CreateSubscriptionToken'
+                  - 'qapps:StartQAppSession'
+                  - 'qapps:StopQAppSession'
+
+
+
+                Resource: 
+                  - !Sub "arn:aws:qbusiness:${AWS::Region}:${AWS::AccountId}:application/*"
+              - Effect: Allow
+                Action:
+                  - 'kms:Decrypt'
+                Resource: 
+                  - !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/key_id"
+              - Effect: Allow
+                Action:
+                  - 'qapps:CreateQApp'
+                  - 'qapps:PredictProblemStatementFromConversation'
+                  - 'qapps:PredictQAppFromProblemStatement'
+                  - 'qapps:CopyQApp'
+                  - 'qapps:GetQApp'
+                  - 'qapps:ListQApps'
+                  - 'qapps:UpdateQApp'
+                  - 'qapps:DeleteQApp'
+                  - 'qapps:AssociateQAppWithUser'
+                  - 'qapps:DisassociateQAppFromUser'
+                  - 'qapps:ImportDocumentToQApp'
+                  - 'qapps:ImportDocumentToQAppSession'
+                  - 'qapps:CreateLibraryItem'
+                  - 'qapps:GetLibraryItem'
+                  - 'qapps:UpdateLibraryItem'
+                  - 'qapps:CreateLibraryItemReview'
+                  - 'qapps:ListLibraryItems'
+                  - 'qapps:CreateSubscriptionToken'
+                  - 'qapps:StartQAppSession'
+                  - 'qapps:StopQAppSession'
+                Resource: 
+                  - !Sub "arn:aws:qapps:${AWS::Region}:${AWS::AccountId}:application/*"
+          PolicyName: WebExperiencePolicy
+
+
+# -------------------------------#
+# Resources from cfn-vpc-aurora.yaml
+# -------------------------------#
+
+  WealthMgmtVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: '10.0.0.0/16'
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: WealthMgmtVPC
+
+  WealthMgmtVPCPublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WealthMgmtVPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: '10.0.0.0/24'
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: WealthMgmtVPC Public Subnet 1
+
+  WealthMgmtVPCPublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WealthMgmtVPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: '10.0.1.0/24'
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: WealthMgmtVPC Public Subnet 2
+
+  WealthMgmtVPCPrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WealthMgmtVPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: '10.0.2.0/24'
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: WealthMgmtVPC Private Subnet 1
+
+  WealthMgmtVPCPrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WealthMgmtVPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: '10.0.3.0/24'
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: WealthMgmtVPC Private Subnet 2
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: WealthMgmtVPC IGW
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref WealthMgmtVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref WealthMgmtVPC
+      Tags:
+        - Key: Name
+          Value: WealthMgmtVPC Public Routes
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref WealthMgmtVPCPublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref WealthMgmtVPCPublicSubnet2
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref WealthMgmtVPCPublicSubnet1
+
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref WealthMgmtVPC
+      Tags:
+        - Key: Name
+          Value: WealthMgmtVPC Private Routes
+
+  DefaultPrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref WealthMgmtVPCPrivateSubnet1
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref WealthMgmtVPCPrivateSubnet2
+
+  # Aurora RDS and Secrets Manager
+  DBCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "clusteradmin"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\'
+      Name: WealthMgmtDBSecret
+
+  AuroraDBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow traffic to Aurora DB
+      VpcId: !Ref WealthMgmtVPC
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic by default
+          IpProtocol: "-1"
+      SecurityGroupIngress:
+        - CidrIp: '10.0.0.0/16'
+          Description: Allow inbound PostgreSQL traffic from VPC CIDR
+          FromPort: 5432
+          IpProtocol: tcp
+          ToPort: 5432
+        - SourceSecurityGroupId: !Ref EC2SecurityGroup  # Allow traffic specifically from EC2 instance
+          Description: Allow inbound PostgreSQL traffic from EC2 instance
+          FromPort: 5432
+          IpProtocol: tcp
+          ToPort: 5432
+
+  AuroraServerlessV2ClusterSubnets:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnets for AuroraServerlessV2Cluster database
+      SubnetIds:
+        - !Ref WealthMgmtVPCPrivateSubnet1
+        - !Ref WealthMgmtVPCPrivateSubnet2
+
+  AuroraServerlessV2Cluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      Engine: aurora-postgresql
+      EngineVersion: "16.1"
+      DatabaseName: WealthMgmtDB
+      MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref DBCredentialsSecret, ':SecretString:username}}']]
+      MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref DBCredentialsSecret, ':SecretString:password}}']]
+      DBSubnetGroupName: !Ref AuroraServerlessV2ClusterSubnets
+      VpcSecurityGroupIds:
+        - !GetAtt AuroraDBSecurityGroup.GroupId
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: 0.5
+        MaxCapacity: 16
+      Port: 5432
+
+  AuroraServerlessV2Instance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref AuroraServerlessV2Cluster
+      DBInstanceClass: db.serverless
+      Engine: aurora-postgresql
+      PubliclyAccessible: false
+
+  # DynamoDB Tables
+  AppConfigTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: app_config
+      AttributeDefinitions:
+        - AttributeName: config_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: config_key
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+
+  ConversationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: conversations
+      AttributeDefinitions:
+        - AttributeName: conversation_id
+          AttributeType: S
+        - AttributeName: app_name
+          AttributeType: S
+        - AttributeName: entity_type
+          AttributeType: S
+        - AttributeName: username
+          AttributeType: S
+      KeySchema:
+        - AttributeName: conversation_id
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      GlobalSecondaryIndexes:
+        - IndexName: app_name_index
+          KeySchema:
+            - AttributeName: app_name
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput:
+            ReadCapacityUnits: 5
+            WriteCapacityUnits: 5
+        - IndexName: entity_type_index
+          KeySchema:
+            - AttributeName: entity_type
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput:
+            ReadCapacityUnits: 5
+            WriteCapacityUnits: 5
+        - IndexName: username_index
+          KeySchema:
+            - AttributeName: username
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput:
+            ReadCapacityUnits: 5
+            WriteCapacityUnits: 5
+
+  GenAIAppsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: genai_apps
+      AttributeDefinitions:
+        - AttributeName: app_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: app_id
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+
+  MessagesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: messages
+      AttributeDefinitions:
+        - AttributeName: message_id
+          AttributeType: S  # Ensure this matches the KeySchema below
+        - AttributeName: conversation_id
+          AttributeType: S  # Ensure this is defined since it is used in GSI
+        - AttributeName: created_at
+          AttributeType: S  # Ensure this is defined since it is used in GSI
+      KeySchema:
+        - AttributeName: message_id
+          KeyType: HASH  # Primary Key defined here
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      GlobalSecondaryIndexes:
+        - IndexName: conversation_id-index
+          KeySchema:
+            - AttributeName: conversation_id
+              KeyType: HASH
+            - AttributeName: created_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput:
+            ReadCapacityUnits: 5
+            WriteCapacityUnits: 5
+
+  # EC2 for Aurora Interaction
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/EC2InstanceConnect
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AWSCloudFormationFullAccess
+        - arn:aws:iam::aws:policy/AWSLambda_FullAccess
+      Policies:
+        - PolicyName: AuroraAccessPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBClusters
+                  - secretsmanager:GetSecretValue
+                  - s3:GetObject
+                Resource:
+                  - !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${AuroraServerlessV2Cluster}
+                  - !Ref DBCredentialsSecret
+                  - arn:aws:s3:::ws-assets-prod-iad-r-pdx-f3b3f9f1a7d6a3d0/8e7f13d3-ab0e-4f24-a442-7af9ccd12e2d/wm-dump.sql
+        - PolicyName: SSMPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                  - ssm:GetParameters
+                  - ssm:DeleteParameter
+                Resource: "*"
+        - PolicyName: IAMPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:CreatePolicy
+                  - iam:TagRole
+                  - iam:PutRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/cdk-*"
+              - Effect: Allow
+                Action: iam:CreatePolicy
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:policy/*"
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2InstanceRole
+
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - AuroraServerlessV2Cluster
+      - AuroraServerlessV2Instance
+    Properties:
+      ImageId: 'ami-093a4ad9a8cc370f4'  # Replace with your desired AMI ID - ami-0d081196e3df05f4d
+      InstanceType: 't2.large'
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: "0"
+          GroupSet:
+            - !Ref EC2SecurityGroup
+          SubnetId: !Ref WealthMgmtVPCPublicSubnet1
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      Tags:
+        - Key: Name
+          Value: WealthMgmt-EC2
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            sudo su ec2-user
+            sudo dnf update -y
+            sudo dnf install -y python3 python3-pip docker aws-cli unzip postgresql15 jq
+            sudo systemctl enable docker
+            sudo systemctl start docker
+            sudo usermod -aG docker ec2-user
+            until aws rds describe-db-clusters --db-cluster-identifier ${AuroraServerlessV2Cluster} --query 'DBClusters[0].Status' --output text | grep -q 'available'; do
+              sleep 30
+            done
+            AURORA_ENDPOINT=$(aws rds describe-db-clusters --db-cluster-identifier ${AuroraServerlessV2Cluster} --query 'DBClusters[0].Endpoint' --output text)
+            DB_SECRET=$(aws secretsmanager get-secret-value --secret-id ${DBCredentialsSecret} --query 'SecretString' --output text)
+            DB_PASSWORD=$(echo $DB_SECRET | jq -r '.password')
+            aws s3 cp s3://ws-assets-prod-iad-r-pdx-f3b3f9f1a7d6a3d0/8e7f13d3-ab0e-4f24-a442-7af9ccd12e2d/wm-dump.sql /home/ec2-user/wealth_mgmt_dump.sql
+            PGPASSWORD=$DB_PASSWORD psql -h $AURORA_ENDPOINT -U clusteradmin -d WealthMgmtDB -f /home/ec2-user/wealth_mgmt_dump.sql
+
+            #yfin-api-lambda
+            #download and extract yfin-api-lambda 
+            cd /home/ec2-user
+            aws s3  cp s3://ws-assets-prod-iad-r-pdx-f3b3f9f1a7d6a3d0/d4acefc0-414b-41e6-981c-56c3da77d760/config/yfin-api-lambda.zip ./
+            unzip yfin-api-lambda.zip -d yfin-api-lambda 
+
+            #install sam
+            pip install --user aws-sam-cli
+
+            #build and deploy
+            cd /home/ec2-user/yfin-api-lambda 
+            sam build --use-container
+            pytest -v -s tests/integration/test_api.py
+            sam deploy --no-confirm-changeset
+
+
+            #yfin agents cdk
+            # Download and extract the CDK application
+            cd /home/ec2-user
+            aws s3 cp s3://ws-assets-prod-iad-r-pdx-f3b3f9f1a7d6a3d0/d4acefc0-414b-41e6-981c-56c3da77d760/config/yfin-agents-cdk.zip ./
+            unzip yfin-agents-cdk.zip -d yfin-agents-cdk
+
+            # Install CDK globally
+            sudo dnf install -y nodejs npm
+            sudo npm install -g aws-cdk
+
+
+            # Navigate to the CDK project directory and deploy
+            cd yfin-agents-cdk
+            pip install -r requirements.txt
+            export LAMBDA_ARN=$(aws lambda list-functions --query 'Functions[?contains(FunctionName, `yfin-api-ApiFunction-`)].FunctionArn' --output text)
+            cdk bootstrap 
+            cdk deploy --require-approval never
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow EC2 Instance Connect and HTTP/SSH access
+      VpcId: !Ref WealthMgmtVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '10.0.0.0/16'
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+
+  
+# -------------------------------#
+# CDE Resources
+# -------------------------------#
+  PreExtractionLambda:
+      Type: 'AWS::Lambda::Function'
+      Properties:
+          Handler: index.lambda_handler
+          Runtime: python3.12
+          Role: !GetAtt 'CDELambdaRole.Arn'
+          Timeout: 300
+          MemorySize: 1024
+          Code:
+              ZipFile: |
+                  import json
+                  import boto3
+                  import time
+                  from boto3.session import Session
+                  import os
+                  import re
+                  import base64
+                  import io
+
+                  s3 = boto3.client("s3")
+                  def fetch_image_from_s3(bucket_name, object_name):
+                      """Fetches an image from an S3 bucket and returns it as a BytesIO object."""
+                      image_content = io.BytesIO()
+                      try:
+                          s3.download_fileobj(bucket_name, object_name, image_content)
+                          image_content.seek(0)  # Reset the stream position to the beginning
+                          print("Image successfully fetched from S3.")
+                          return image_content
+                      except Exception as e:
+                          print(f"Error fetching image from S3: {e}")
+                          return None
+
+                  def image_to_base64(img):
+                      """Converts a BytesIO object to a base64 string."""
+                      if isinstance(img, io.BytesIO):
+                          return base64.b64encode(img.getvalue()).decode("utf-8")
+                      else:
+                          raise ValueError(f"Expected BytesIO object. Got {type(img)}")
+
+                  def image_to_text(encoded_image):
+                      """Converts an encoded image to text using a Bedrock Runtime model."""
+                      client = boto3.client("bedrock-runtime", region_name='us-west-2')
+                      model_id = "anthropic.claude-3-haiku-20240307-v1:0"
+                      prompt = """
+                      You are a document image analysis expert, and will help others to understand what this image is about. Please answer truthfully and accurately according to the provided images and following instructions.
+                      <instructions>
+                      - Please provide a title for this image. However, do not include your own commentary in the output; present the results in the following format:\nimage_title: <result>
+                      - Please provide a description of this image. However, do not include your own commentary in the output; present the results in the following format:\nimage_description: <result>
+                      - Please extract all text contained in this image. However, do not include your own commentary in the output; present the results in the following format:\nimage_ocr: <result>
+                      - If there is a table in the image, please provide a brief description of the table schema and explain the table briefly. However, please be succinct and truthful; present the results in the following format:\ntable: <result>
+                      - Do not guess or make assumptions without evidence. If there are no figures, images, charts, graphs, tables within the document, just say so.
+                      </instructions>"""
+                      native_request = {
+                          "anthropic_version": "bedrock-2023-05-31",
+                          "max_tokens": 1024,
+                          "temperature": 0.6,
+                          "top_p": 0.9,
+                          "messages": [
+                              {
+                                  "role": "user",
+                                  "content": [
+                                      {
+                                          "type": "image",
+                                          "source": {
+                                              "type": "base64",
+                                              "media_type": "image/jpeg",
+                                              "data": encoded_image,
+                                          },
+                                      },
+                                      {"type": "text", "text": prompt},
+                                  ],
+                              }
+                          ],
+                      }
+                      request = json.dumps(native_request)
+                      try:
+                          response = client.invoke_model(modelId=model_id, body=request)
+                          model_response = json.loads(response["body"].read())
+                          response_text = model_response["content"][0]["text"]
+                          print(response_text)
+                          return response_text
+                      except Exception as e:
+                          print(f"Error invoking the model: {e}")
+                          return None
+                  def lambda_handler(event, context):
+                      print(event)
+                      s3_bucket = event.get("s3Bucket")
+                      s3_key = event.get("s3ObjectKey")
+                      metadata = event.get("metadata")
+                      extensions = ['.jpg', '.jpeg', '.png', '.tiff']
+                      pattern = r'\.(' + '|'.join(ext.lstrip('.') for ext in extensions) + ')$'
+                      match = re.search(pattern, s3_key, re.IGNORECASE)
+                      if match:
+                          image_content = fetch_image_from_s3(s3_bucket, s3_key)
+                          if image_content is None:
+                              print("Failed to fetch image.")
+                              return
+                          else:
+                              image_base64 = image_to_base64(image_content)
+                              print("Base64 Encoded Image:")
+                              print(image_base64)
+                              text_response = image_to_text(image_base64)
+                              if not text_response:
+                                  print("Failed to process image.")
+                                  return
+                              sentences = re.split(r'(?<=[.!?]) +', text_response)
+                              text = "\n".join(sentence.strip() for sentence in sentences)
+                              new_key = 'cde_pre_output/' + s3_key + '.txt'
+                              s3.put_object(Bucket=s3_bucket, Key=new_key, Body=text)
+                              return {
+                                  "version": "v0",
+                                  "s3ObjectKey": new_key,
+                                  "metadataUpdates": []
+                              }
+                      else:
+                          return {
+                              "version": "v0",
+                              "s3ObjectKey": s3_key,
+                              "metadataUpdates": []
+                          }
+  PostExtractionLambda:
+      Type: 'AWS::Lambda::Function'
+      Properties:
+          Handler: index.lambda_handler
+          Runtime: python3.12
+          Role: !GetAtt 'CDELambdaRole.Arn'
+          Timeout: 300
+          MemorySize: 1024
+          Code:
+              ZipFile: |
+                  import boto3
+                  import logging
+                  import time
+                  import urllib
+                  import json
+                  import re
+
+                  logger = logging.getLogger()
+                  logger.setLevel(logging.INFO)
+
+                  s3 = boto3.client('s3')
+
+                  def metadata_to_text(meta):
+                      # Create a Bedrock Runtime client in the AWS Region of your choice.
+                      client = boto3.client("bedrock-runtime", region_name='us-west-2')
+
+
+                      # Set the model ID, e.g., Claude 3 Haiku.
+                      model_id = "anthropic.claude-3-haiku-20240307-v1:0"
+
+                      # Define the prompt for the model.
+                      prompt = "Describe the following in narrative natural language\n\n" + json.dumps(meta)
+                      # Format the request payload using the model's native structure.
+                      native_request = {
+                          "anthropic_version": "bedrock-2023-05-31",
+                          "max_tokens": 512,
+                          "temperature": 0.3,
+                          "top_p": 0.9,
+                          "messages": [
+                              {
+                                  "role": "user",
+                                  "content": [{"type": "text", "text": prompt}],
+                              }
+                          ],
+                      }
+
+                      # Convert the native request to JSON.
+                      request = json.dumps(native_request)
+
+                      # Invoke the model with the request.
+                      response = client.invoke_model(modelId=model_id, body=request)
+
+                      # Decode the response body.
+                      model_response = json.loads(response["body"].read())
+
+                      # Extract and print the response text.
+                      response_text = model_response["content"][0]["text"]
+                      print(response_text)
+
+                      cats = [dt["value"]["stringValue"] for dt in meta.get("attributes") if dt["name"] == "_category"]
+                      if len(cats) > 0:
+                          category = cats[0] + " : "
+                      else:
+                          category = ""
+                      titles = [dt["value"]["stringValue"] for dt in meta.get("attributes") if dt["name"] == "_document_title"]
+                      if len(titles) > 0:
+                          title = titles[0]
+                      else:
+                          title = ""
+                      return category + title + "\n\n" + response_text
+
+                  def lambda_handler(event, context):
+                      logger.info("Received event: %s" % json.dumps(event))
+                      s3Bucket = event.get("s3Bucket")
+                      s3ObjectKey = event.get("s3ObjectKey")
+                      metadata = event.get("metadata")
+                      logger.info("Metadata: %s" % json.dumps(metadata))
+                      text_data = metadata_to_text(metadata)
+                      qbusiness_document_object = s3.get_object(Bucket = s3Bucket, Key = s3ObjectKey)
+                      qbusiness_document_string = qbusiness_document_object['Body'].read().decode('utf-8')
+                      qbusiness_document = json.loads(qbusiness_document_string)
+                      logger.info("Got document body: %s" % json.dumps(qbusiness_document))
+                      afterCDE_text = text_data + "\n\n" + qbusiness_document["textContent"]["documentBodyText"]
+                      qbusiness_document["textContent"]["documentBodyText"] = afterCDE_text
+                      logger.info("Written document body: %s" % json.dumps(qbusiness_document))
+                      new_key = 'cde_post_output/' + s3ObjectKey +'.txt'
+                      s3.put_object(Bucket = s3Bucket, Key = new_key, Body=json.dumps(qbusiness_document))
+                      return {
+                          "version" : "v0",
+                          "s3ObjectKey": new_key,
+                          "metadataUpdates": []
+                      }
+
+  CDERole:
+      Type: 'AWS::IAM::Role'
+      Properties:
+          AssumeRolePolicyDocument:
+              Version: 2012-10-17
+              Statement:
+                - Sid: ''
+                  Effect: Allow
+                  Principal:
+                    Service: 
+                        - qbusiness.amazonaws.com
+                  Action: 'sts:AssumeRole'
+                  Condition:
+                    StringEquals:
+                      "aws:SourceAccount": !Ref AWS::AccountId
+                    ArnLike:
+                      "aws:SourceArn": !Sub "arn:aws:qbusiness:${AWS::Region}:${AWS::AccountId}:application/*"
+          Policies:
+              - PolicyDocument:
+                  Version: 2012-10-17
+                  Statement:
+                    - Effect: Allow
+                      Action:
+                          - 's3:GetObject'
+                          - 's3:PutObject'
+                      Resource: !Sub                
+                        - 'arn:aws:s3:::${bucket}/*'
+                        - bucket: !Ref S3Bucket
+   
+                    - Effect: Allow
+                      Action:
+                          - 's3:ListBucket'
+                      Resource: !Sub                
+                        - 'arn:aws:s3:::${bucket}/*'
+                        - bucket: !Ref S3Bucket
+                    - Effect: Allow
+                      Action:
+                          - 'lambda:InvokeFunction'
+                      Resource: 
+                          - !GetAtt 'PreExtractionLambda.Arn'
+                          - !GetAtt 'PostExtractionLambda.Arn'
+                PolicyName: CDEPolicy
+  CDELambdaRole:
+      Type: 'AWS::IAM::Role'
+      Properties:
+          AssumeRolePolicyDocument:
+              Version: 2012-10-17
+              Statement:
+                - Sid: ''
+                  Effect: Allow
+                  Principal:
+                    Service: lambda.amazonaws.com
+                  Action: 'sts:AssumeRole'
+          ManagedPolicyArns:
+              - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+              - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+          Policies:
+              - PolicyDocument:
+                  Version: 2012-10-17
+                  Statement:
+                    - Effect: Allow
+                      Action:
+                          - 's3:ListBucket'
+                      Resource: !Sub                
+                        - 'arn:aws:s3:::${bucket}/*'
+                        - bucket: !Ref S3Bucket
+                    - Effect: Allow
+                      Action:
+                        - textract:*
+                      Resource: '*'
+                    - Effect: Allow
+                      Action:
+                        - s3:GetObject
+                        - s3:PutObject
+                      Resource: !Sub                
+                        - 'arn:aws:s3:::${bucket}/*'
+                        - bucket: !Ref S3Bucket
+                    - Effect: Allow
+                      Action:
+                        - lambda:PublishLayerVersion
+                        - lambda:AddLayerVersionPermission
+                        - lambda:ListLayerVersions
+                        - lambda:DeleteLayerVersion
+                        - qbusiness:UpdateDataSource
+                      Resource: "*"
+                PolicyName: CDELambdaPolicy
+
+# -------------------------------#
+# Parameters
+# -------------------------------#
+Parameters:
+  AssetBucketName:
+    Type: String
+    Default: For self paced labs in customer account, please leave the default value as is.
+    Description: Name of the event asset bucket. For self paced labs in customer account, please leave the default value as is.
+  AssetBucketPrefix:
+    Type: String
+    Default: For self paced labs in customer account, please leave the default value as is.
+    Description: Prefix for the asset bucket. For self paced labs in customer account, please leave the default value as is.
+  IsWorkshopStudioEnv:
+    Type: String
+    Default: "no"
+    AllowedValues:
+      - "no"
+      - "yes"
+    Description: Whether this stack is being deployed in a Workshop Studio environment or not. If not sure, leave as default of "no".
+  IDCInstanceArn:
+    Type: String
+    Description: The ARN of the existing AWS IAM Identity Center (IDC) instance, if one exists.
+    Default: ""
+    ConstraintDescription: "Must be a valid ARN or empty string if no instance exists."
+
+  CreateQApp:
+    Type: String
+    Default: "no"
+    AllowedValues:
+      - "no"
+      - "yes"
+    Description: Whether this stack should create samples Amazon Q Business Application. If not sure, leave as default of "no".
+
+# -------------------------------#
+# Outputs
+# -------------------------------#
+Outputs:
+  AssetBucketName:
+    Description: The name of the asset bucket
+    Value: !Ref AssetBucketName
+  S3BucketUrl:
+    Description: Your S3 bucket to be used as a data source
+    Value: 
+      Fn::Join:
+        - ""
+        - - "https://console.aws.amazon.com/s3/home?bucket="
+          - !Ref S3Bucket
+
+ 
+  PreExtractionLambdaARN:
+      Value: !GetAtt 'PreExtractionLambda.Arn'
+  PostExtractionLambdaARN:
+      Value: !GetAtt 'PostExtractionLambda.Arn'
+  CDERoleARN:
+      Value: !GetAtt 'CDERole.Arn'
+
+  VPCID:
+    Description: The ID of the Aurora VPC
+    Value: !Ref WealthMgmtVPC
+
+  AuroraClusterEndpoint:
+    Description: Aurora Serverless Cluster Endpoint
+    Value: !GetAtt AuroraServerlessV2Cluster.Endpoint.Address
+
+  AuroraDBSecretARN:
+    Description: Aurora DB Secret ARN
+    Value: !Ref DBCredentialsSecret
+
+  IDCInstanceArn:
+    Condition: ShouldCreateIDC
+    Description: AWS IAM Identity Center instance Arn
+    Value: !GetAtt IDCInstance.InstanceArn
+
+  S3BucketNameExport:
+    Description: The name of your S3 bucket
+    Value: !Ref S3Bucket
+    Export:
+      Name: "eq-infra-setup-S3BucketName"
+  
+  DataSourceRole:
+    Description: The DataSourceRole Arn
+    Value: !GetAtt DataSourceRole.Arn
+
+  WebExperienceRole:
+    Description: The WebExperienceRole Arn
+    Value: !GetAtt WebExperienceRole.Arn
+  
+  

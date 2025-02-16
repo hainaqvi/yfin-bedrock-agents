@@ -1,0 +1,17 @@
+{
+    "sessionId": "123456789012345",
+    "sessionAttributes": {},
+    "inputText": "Show me today's top gainers",
+    "promptSessionAttributes": {},
+    "apiPath": "/day_gainers",
+    "agent": {
+      "name": "yfAgent",
+      "version": "DRAFT",
+      "id": "XLHH72XNF2",
+      "alias": "TSTALIASID"
+    },
+    "httpMethod": "GET",
+    "messageVersion": "1.0",
+    "actionGroup": "StockInfo"
+  }
+  

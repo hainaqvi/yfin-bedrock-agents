@@ -1,0 +1,174 @@
+{
+    "openapi": "3.0.3",
+    "info": {
+        "title": "stock_financials balance sheet, cash flow, income statement and news API",
+        "version": "1.0.0"
+    },
+    "servers": [
+        {
+            "url": "/"
+        }
+    ],
+    "paths": {
+        "/balance_sheet": {
+            "get": {
+                "summary": "GET /balance_sheet",
+                "description": "Get stocks's balance sheet",
+                "operationId": "get_balance_sheet",
+                "parameters": [
+                {
+                    "description": "Symbol for the Stock",
+                    "required": true,
+                    "schema": {
+                    "type": "string",
+                    "title": "symbol",
+                    "description": "Symbol for the Stock"
+                    },
+                    "name": "symbol",
+                    "in": "query"
+                }
+                ],
+                "responses": {
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    },
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {}
+                        }
+                    }
+                }
+            }
+        },
+        "/cash_flow": {
+            "get": {
+                "summary": "GET /cash_flow",
+                "description": "Get Stock's cash flow",
+                "operationId": "get_cash_flow",
+                "parameters": [
+                {
+                    "description": "Symbol for the Stock",
+                    "required": true,
+                    "schema": {
+                    "type": "string",
+                    "title": "symbol",
+                    "description": "Symbol for the Stock"
+                    },
+                    "name": "symbol",
+                    "in": "query"
+                }
+                ],
+                "responses": {
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    },
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {}
+                        }
+                    }
+                }
+            }
+        },
+        "/income_stmt": {
+            "get": {
+                "summary": "GET /income_stmt",
+                "description": "Get Stock's income statement",
+                "operationId": "get_income_stmt",
+                "parameters": [
+                {
+                    "description": "Symbol for the Stock",
+                    "required": true,
+                    "schema": {
+                    "type": "string",
+                    "title": "symbol",
+                    "description": "Symbol for the Stock"
+                    },
+                    "name": "symbol",
+                    "in": "query"
+                }
+                ],
+                "responses": {
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    },
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {}
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "HTTPValidationError": {
+                "properties": {
+                    "detail": {
+                        "items": {
+                            "$ref": "#/components/schemas/ValidationError"
+                        },
+                        "type": "array",
+                        "title": "Detail"
+                    }
+                },
+                "type": "object",
+                "title": "HTTPValidationError"
+            },
+            "ValidationError": {
+                "properties": {
+                    "loc": {
+                        "items": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "integer"
+                                }
+                            ]
+                        },
+                        "type": "array",
+                        "title": "Location"
+                    },
+                    "type": {
+                        "type": "string",
+                        "title": "Error Type"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "loc",
+                    "msg",
+                    "type"
+                ],
+                "title": "ValidationError"
+            }
+        }
+    }
+}

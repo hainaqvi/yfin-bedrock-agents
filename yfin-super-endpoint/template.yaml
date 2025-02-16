@@ -1,0 +1,36 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Bedrock Agent Endpoint Lambda
+
+Resources:
+  YfinEndpoint:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Timeout: 30
+      MemorySize: 128
+      Environment:
+        Variables:
+          BEDROCK_AGENT_ID: !Sub '${env:YFIN_AGENT_ID}' 
+          AGENT_ALIAS_ID: !Sub '${env:YFIN_AGENT_ALIAS_ID}'
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /invoke
+            Method: POST
+                  
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeAgent
+              Resource: 
+                - "*"
+
+Outputs:
+  ApiGatewayURL:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/invoke"

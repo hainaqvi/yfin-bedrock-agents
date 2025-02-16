@@ -1,0 +1,18 @@
+{
+  "sessionId": "123456789012345",
+    "sessionAttributes": {},
+    "inputText": "Show me today's most active stocks",
+    "promptSessionAttributes": {},
+    "apiPath": "/most_active",
+    "agent": {
+      "name": "yfAgent",
+      "version": "DRAFT",
+      "id": "XLHH72XNF2",
+      "alias": "TSTALIASID"
+  },
+  "httpMethod": "GET",
+  "messageVersion": "1.0",
+  "actionGroup": "StockInfo"
+}
+
+  

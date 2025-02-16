@@ -1,0 +1,125 @@
+{
+    "openapi": "3.0.1",
+    "info": {
+      "title": "Yahoo finance Bedrock agent",
+      "version": "1.0.0"
+    },
+    "servers": [
+      {
+        "url": "*** Replace with ApiGatewayURL**"
+      }
+    ],
+    "paths": {
+      "/invoke": {
+        "post": {
+          "summary": "POST /invoke",
+          "description": "This agent is used by Financial advisors to provide comprehensive market insights across various investment domains, including stocks, ETFs, cryptocurrencies, bonds, futures, and market sectors. ",
+          "operationId": "invoke_agent_invoke_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            },
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ChatResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "components": {
+      "schemas": {
+        "ChatRequest": {
+          "type": "object",
+          "title": "ChatRequest",
+          "properties": {
+            "prompt": {
+              "type": "string",
+              "title": "Prompt"
+            }
+          },
+          "required": ["prompt"]
+        },
+        "ChatResponse": {
+          "type": "object",
+          "title": "ChatResponse",
+          "properties": {
+            "response": {
+              "type": "string",
+              "title": "Response"
+            }
+          },
+          "required": ["response"]
+        },
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "type": "array",
+              "title": "Detail"
+            }
+          },
+          "type": "object",
+          "title": "HTTPValidationError"
+        },
+        "ValidationError": {
+          "properties": {
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "type": "array",
+              "title": "Location"
+            },
+            "msg": {
+              "type": "string",
+              "title": "Message"
+            },
+            "type": {
+              "type": "string",
+              "title": "Error Type"
+            }
+          },
+          "type": "object",
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError"
+        }
+      }
+    }
+}
