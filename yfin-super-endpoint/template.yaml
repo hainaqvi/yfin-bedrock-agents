@@ -2,6 +2,14 @@ AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: Bedrock Agent Endpoint Lambda
 
+Parameters:
+  YfinAgentId:
+    Type: String
+    Description: "Bedrock Agent ID"
+  YfinAgentAliasId:
+    Type: String
+    Description: "Bedrock Agent Alias ID"
+
 Resources:
   YfinEndpoint:
     Type: AWS::Serverless::Function
@@ -13,8 +21,8 @@ Resources:
       MemorySize: 128
       Environment:
         Variables:
-          BEDROCK_AGENT_ID: !Sub '${env:YFIN_AGENT_ID}' 
-          AGENT_ALIAS_ID: !Sub '${env:YFIN_AGENT_ALIAS_ID}'
+          BEDROCK_AGENT_ID: !Ref YfinAgentId
+          AGENT_ALIAS_ID: !Ref YfinAgentAliasId
       Events:
         Api:
           Type: Api

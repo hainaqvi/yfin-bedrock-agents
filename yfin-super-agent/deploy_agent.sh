@@ -70,12 +70,18 @@ install_requirements() {
 # Run the agent creation script
 run_agent_creation() {
     print_status "Running Bedrock agent creation script..."
-    python3 yfin-super-agent/src/create_agent.py
+    python3 src/create_agent.py
     if [ $? -eq 0 ]; then
         print_success "Agent creation completed successfully"
     else
-        print_error "Agent creation failed"
-        exit 1
+        print_error "Agent creation failed trying again"
+        python3 src/create_agent.py
+        if [ $? -eq 0 ]; then
+            print_success "Agent creation completed successfully"
+        else
+            print_error "Agent creation failed"
+            exit 1
+        fi
     fi
 }
 

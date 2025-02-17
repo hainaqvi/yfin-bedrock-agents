@@ -118,7 +118,7 @@ Next, you can use AWS Serverless Application Repository to deploy ready to use A
 
 ## Issues
 sudo cat /var/log/cloud-init-output.log
-sudo tail -f /var/log/cloud-init-output.log
+sudo tail -f -n 500 /var/log/cloud-init-output.log
 
 zip -r yfin-api-lambda.zip .
 
@@ -126,3 +126,10 @@ zip -r yfin-api-lambda.zip .
 yfinAgent
 
 This agent is used by Financial advisors to provide comprehensive market insights across various investment domains, including stocks, ETFs, cryptocurrencies, bonds, futures, and market sectors.  
+
+
+sam deploy --parameter-overrides YfinAgentId=$YFIN_AGENT_ID YfinAgentAliasId=$YFIN_AGENT_ALIAS_ID
+
+# License
+This project is licensed under the MIT-0 License - see the LICENSE file for details.
+

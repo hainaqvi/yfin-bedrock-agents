@@ -119,7 +119,12 @@ class BedrockAgentManager:
                 agent_foundation_model,
                 agent_collaboration='SUPERVISOR_ROUTER'
             )
-            self.associate_collaborators(agent_id)
+            time.sleep(30)
+            try:
+                self.associate_collaborators(agent_id)
+            except Exception as e:
+                self.associate_collaborators(agent_id)
+                raise
             
             return agent_id, agent_alias_id, agent_alias_arn
 
@@ -255,6 +260,8 @@ class BedrockAgentManager:
                     relayConversationHistory=sub_agent["relay_conversation_history"],
                 )
             )
+            time.sleep(30)
+
             self.wait_agent_status_update(supervisor_agent_id)
             self._bedrock_agent_client.prepare_agent(agentId=supervisor_agent_id)
             self.wait_agent_status_update(supervisor_agent_id)

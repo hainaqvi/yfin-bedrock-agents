@@ -1,3 +1,6 @@
+# -------------------------------#
+# This project is licensed under the MIT-0 License - see the LICENSE file for details.
+# -------------------------------#
 Conditions:
   IsWS: !Equals 
     - !Ref IsWorkshopStudioEnv
@@ -187,8 +190,8 @@ Resources:
     Type: AWS::QBusiness::Application
     Condition: IfCreateQApp
     Properties:
-      DisplayName: wealth-mgmt-app
-      Description: qbusiness demo app
+      DisplayName: agent-hub-app
+      Description: AI Agent Hub
       IdentityType: AWS_IAM_IDC
       IdentityCenterInstanceArn: !If
       - ShouldCreateIDC
@@ -205,8 +208,8 @@ Resources:
       ApplicationId: !Ref QBusinessApp
       CapacityConfiguration: 
          Units: 1
-      Description: "Index for wealth management application"
-      DisplayName: "WealthMgmtIndex"
+      Description: "Index for agent-hub-app application"
+      DisplayName: "agent-hub-app-index"
       Type: "ENTERPRISE"
   RetrieverRole:
     Type: AWS::IAM::Role
@@ -234,7 +237,7 @@ Resources:
     Condition: IfCreateQApp
     Properties:
       ApplicationId: !Ref QBusinessApp
-      DisplayName: "wealth-mgmt-retriever"
+      DisplayName: "agent-hub-app-retriever"
       Type: NATIVE_INDEX
       Configuration: 
         NativeIndexConfiguration:
@@ -248,8 +251,8 @@ Resources:
       Properties:
         ApplicationId: !Ref QBusinessApp
         IndexId: !GetAtt QBusinessIndex.IndexId
-        DisplayName: "wealth-mgmt-ds"
-        Description: "Wealth Management data source"
+        DisplayName: "agent-hub-app-ds"
+        Description: "agent-hub-app data source"
         RoleArn: !GetAtt DataSourceRole.Arn
         # Add other properties as needed
         Configuration:
@@ -326,8 +329,8 @@ Resources:
                       raise ValueError(f"Missing required property: {prop}")
               
               # Unzip and copy content
-              source_bucket = 'ws-assets-prod-iad-r-nrt-2cb4b4649d0e0f94'
-              source_key = '8e7f13d3-ab0e-4f24-a442-7af9ccd12e2d/config/wm-content.zip'
+              source_bucket = 'ws-assets-prod-iad-r-pdx-f3b3f9f1a7d6a3d0'
+              source_key = 'd4acefc0-414b-41e6-981c-56c3da77d760/config/wm-content.zip'
               destination_bucket = event['ResourceProperties']['S3Bucket']
               destination_prefix = 'wm-content/'
               
@@ -379,19 +382,6 @@ Resources:
       Title: Agent Ops App
       RoleArn: !GetAtt WebExperienceRole.Arn
 
-  YFinAgentPlugin:
-    Type: 'AWS::QBusiness::Plugin'
-    DependsOn: QBusinessApp
-    Properties:
-      ApplicationId: !GetAtt QBusinessApp.ApplicationId
-      DisplayName: 'yfinAgent'
-      Type: 'CUSTOM'
-      Description: 'This agent is used by Financial advisors to provide comprehensive market insights across various investment domains, including stocks, ETFs, cryptocurrencies, bonds, futures, and market sectors.'
-      ApiSchema:
-        S3:
-          Bucket: 'ws-assets-prod-iad-r-pdx-f3b3f9f1a7d6a3d0'
-          Key: 'd4acefc0-414b-41e6-981c-56c3da77d760/yfin-agent-openapi.json'
-          Region: 'us-west-2'
   DataSourceRole:
     Type: 'AWS::IAM::Role'
     Properties:
@@ -685,177 +675,7 @@ Resources:
       RouteTableId: !Ref PrivateRouteTable
       SubnetId: !Ref WealthMgmtVPCPrivateSubnet2
 
-  # Aurora RDS and Secrets Manager
-  DBCredentialsSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      GenerateSecretString:
-        SecretStringTemplate: '{"username": "clusteradmin"}'
-        GenerateStringKey: 'password'
-        PasswordLength: 16
-        ExcludeCharacters: '"@/\'
-      Name: WealthMgmtDBSecret
-
-  AuroraDBSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Allow traffic to Aurora DB
-      VpcId: !Ref WealthMgmtVPC
-      SecurityGroupEgress:
-        - CidrIp: 0.0.0.0/0
-          Description: Allow all outbound traffic by default
-          IpProtocol: "-1"
-      SecurityGroupIngress:
-        - CidrIp: '10.0.0.0/16'
-          Description: Allow inbound PostgreSQL traffic from VPC CIDR
-          FromPort: 5432
-          IpProtocol: tcp
-          ToPort: 5432
-        - SourceSecurityGroupId: !Ref EC2SecurityGroup  # Allow traffic specifically from EC2 instance
-          Description: Allow inbound PostgreSQL traffic from EC2 instance
-          FromPort: 5432
-          IpProtocol: tcp
-          ToPort: 5432
-
-  AuroraServerlessV2ClusterSubnets:
-    Type: AWS::RDS::DBSubnetGroup
-    Properties:
-      DBSubnetGroupDescription: Subnets for AuroraServerlessV2Cluster database
-      SubnetIds:
-        - !Ref WealthMgmtVPCPrivateSubnet1
-        - !Ref WealthMgmtVPCPrivateSubnet2
-
-  AuroraServerlessV2Cluster:
-    Type: AWS::RDS::DBCluster
-    Properties:
-      Engine: aurora-postgresql
-      EngineVersion: "16.1"
-      DatabaseName: WealthMgmtDB
-      MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref DBCredentialsSecret, ':SecretString:username}}']]
-      MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref DBCredentialsSecret, ':SecretString:password}}']]
-      DBSubnetGroupName: !Ref AuroraServerlessV2ClusterSubnets
-      VpcSecurityGroupIds:
-        - !GetAtt AuroraDBSecurityGroup.GroupId
-      ServerlessV2ScalingConfiguration:
-        MinCapacity: 0.5
-        MaxCapacity: 16
-      Port: 5432
-
-  AuroraServerlessV2Instance:
-    Type: AWS::RDS::DBInstance
-    Properties:
-      DBClusterIdentifier: !Ref AuroraServerlessV2Cluster
-      DBInstanceClass: db.serverless
-      Engine: aurora-postgresql
-      PubliclyAccessible: false
-
-  # DynamoDB Tables
-  AppConfigTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: app_config
-      AttributeDefinitions:
-        - AttributeName: config_key
-          AttributeType: S
-      KeySchema:
-        - AttributeName: config_key
-          KeyType: HASH
-      ProvisionedThroughput:
-        ReadCapacityUnits: 5
-        WriteCapacityUnits: 5
-
-  ConversationsTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: conversations
-      AttributeDefinitions:
-        - AttributeName: conversation_id
-          AttributeType: S
-        - AttributeName: app_name
-          AttributeType: S
-        - AttributeName: entity_type
-          AttributeType: S
-        - AttributeName: username
-          AttributeType: S
-      KeySchema:
-        - AttributeName: conversation_id
-          KeyType: HASH
-      ProvisionedThroughput:
-        ReadCapacityUnits: 5
-        WriteCapacityUnits: 5
-      GlobalSecondaryIndexes:
-        - IndexName: app_name_index
-          KeySchema:
-            - AttributeName: app_name
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-          ProvisionedThroughput:
-            ReadCapacityUnits: 5
-            WriteCapacityUnits: 5
-        - IndexName: entity_type_index
-          KeySchema:
-            - AttributeName: entity_type
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-          ProvisionedThroughput:
-            ReadCapacityUnits: 5
-            WriteCapacityUnits: 5
-        - IndexName: username_index
-          KeySchema:
-            - AttributeName: username
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-          ProvisionedThroughput:
-            ReadCapacityUnits: 5
-            WriteCapacityUnits: 5
-
-  GenAIAppsTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: genai_apps
-      AttributeDefinitions:
-        - AttributeName: app_id
-          AttributeType: S
-      KeySchema:
-        - AttributeName: app_id
-          KeyType: HASH
-      ProvisionedThroughput:
-        ReadCapacityUnits: 5
-        WriteCapacityUnits: 5
-
-  MessagesTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: messages
-      AttributeDefinitions:
-        - AttributeName: message_id
-          AttributeType: S  # Ensure this matches the KeySchema below
-        - AttributeName: conversation_id
-          AttributeType: S  # Ensure this is defined since it is used in GSI
-        - AttributeName: created_at
-          AttributeType: S  # Ensure this is defined since it is used in GSI
-      KeySchema:
-        - AttributeName: message_id
-          KeyType: HASH  # Primary Key defined here
-      ProvisionedThroughput:
-        ReadCapacityUnits: 5
-        WriteCapacityUnits: 5
-      GlobalSecondaryIndexes:
-        - IndexName: conversation_id-index
-          KeySchema:
-            - AttributeName: conversation_id
-              KeyType: HASH
-            - AttributeName: created_at
-              KeyType: RANGE
-          Projection:
-            ProjectionType: ALL
-          ProvisionedThroughput:
-            ReadCapacityUnits: 5
-            WriteCapacityUnits: 5
-
+  
   # EC2 for Aurora Interaction
   EC2InstanceRole:
     Type: AWS::IAM::Role
@@ -874,20 +694,11 @@ Resources:
         - arn:aws:iam::aws:policy/AmazonS3FullAccess
         - arn:aws:iam::aws:policy/AWSCloudFormationFullAccess
         - arn:aws:iam::aws:policy/AWSLambda_FullAccess
+        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+        - arn:aws:iam::aws:policy/AmazonAPIGatewayAdministrator
+        - arn:aws:iam::aws:policy/CloudFrontFullAccess
+
       Policies:
-        - PolicyName: AuroraAccessPolicy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - rds:DescribeDBClusters
-                  - secretsmanager:GetSecretValue
-                  - s3:GetObject
-                Resource:
-                  - !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${AuroraServerlessV2Cluster}
-                  - !Ref DBCredentialsSecret
-                  - arn:aws:s3:::ws-assets-prod-iad-r-pdx-f3b3f9f1a7d6a3d0/8e7f13d3-ab0e-4f24-a442-7af9ccd12e2d/wm-dump.sql
         - PolicyName: SSMPolicy
           PolicyDocument:
             Version: "2012-10-17"
@@ -914,7 +725,9 @@ Resources:
                 Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/*"
               - Effect: Allow
                 Action: iam:PassRole
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/cdk-*"
+                Resource:  
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cdk-*"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/DEFAULT_AgentExecutionRole"
               - Effect: Allow
                 Action: iam:CreatePolicy
                 Resource: !Sub "arn:aws:iam::${AWS::AccountId}:policy/*"
@@ -927,9 +740,6 @@ Resources:
 
   EC2Instance:
     Type: AWS::EC2::Instance
-    DependsOn:
-      - AuroraServerlessV2Cluster
-      - AuroraServerlessV2Instance
     Properties:
       ImageId: 'ami-093a4ad9a8cc370f4'  # Replace with your desired AMI ID - ami-0d081196e3df05f4d
       InstanceType: 't2.large'
@@ -946,55 +756,135 @@ Resources:
       UserData:
         Fn::Base64:
           !Sub |
-            #!/bin/bash
-            sudo su ec2-user
+            #!/bin/bash -x
+
+            # Need sudo for logging to /var/log
+            exec > >(sudo tee /var/log/user-data.log) 2>&1
+
+            # Install required packages as root
             sudo dnf update -y
             sudo dnf install -y python3 python3-pip docker aws-cli unzip postgresql15 jq
-            sudo systemctl enable docker
+
+            # Start and enable docker service
             sudo systemctl start docker
+            sudo systemctl enable docker
             sudo usermod -aG docker ec2-user
-            until aws rds describe-db-clusters --db-cluster-identifier ${AuroraServerlessV2Cluster} --query 'DBClusters[0].Status' --output text | grep -q 'available'; do
-              sleep 30
-            done
-            AURORA_ENDPOINT=$(aws rds describe-db-clusters --db-cluster-identifier ${AuroraServerlessV2Cluster} --query 'DBClusters[0].Endpoint' --output text)
-            DB_SECRET=$(aws secretsmanager get-secret-value --secret-id ${DBCredentialsSecret} --query 'SecretString' --output text)
-            DB_PASSWORD=$(echo $DB_SECRET | jq -r '.password')
-            aws s3 cp s3://ws-assets-prod-iad-r-pdx-f3b3f9f1a7d6a3d0/8e7f13d3-ab0e-4f24-a442-7af9ccd12e2d/wm-dump.sql /home/ec2-user/wealth_mgmt_dump.sql
-            PGPASSWORD=$DB_PASSWORD psql -h $AURORA_ENDPOINT -U clusteradmin -d WealthMgmtDB -f /home/ec2-user/wealth_mgmt_dump.sql
 
-            #yfin-api-lambda
-            #download and extract yfin-api-lambda 
+            # Create script to run as ec2-user
+            cat << 'EOF' > /home/ec2-user/setup.sh
+            #!/bin/bash -xe
             cd /home/ec2-user
-            aws s3  cp s3://ws-assets-prod-iad-r-pdx-f3b3f9f1a7d6a3d0/d4acefc0-414b-41e6-981c-56c3da77d760/config/yfin-api-lambda.zip ./
-            unzip yfin-api-lambda.zip -d yfin-api-lambda 
 
-            #install sam
-            pip install --user aws-sam-cli
+            # Install nvm
+            curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.33.0/install.sh | bash
 
-            #build and deploy
-            cd /home/ec2-user/yfin-api-lambda 
+            # Source nvm
+            . ~/.bashrc
+
+            # Load nvm
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+            [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+
+            # Install Node.js v16 (includes npm)
+            nvm install v16
+
+            # Create status directory
+            mkdir -p /home/ec2-user/status
+
+            # Create and activate virtual environment
+            python3 -m venv .yf-agent-env
+            source .yf-agent-env/bin/activate
+
+            # Status 1: Virtual environment created
+            touch /home/ec2-user/status/1-venv-created
+
+            ## Download and setup yfin-api-lambda
+            touch /home/ec2-user/status/2-yfin-lambda-start
+            aws s3 cp s3://ws-assets-prod-iad-r-pdx-f3b3f9f1a7d6a3d0/d4acefc0-414b-41e6-981c-56c3da77d760/config/yfin-api-lambda.zip ./
+            unzip yfin-api-lambda.zip -d yfin-api-lambda
+            touch /home/ec2-user/status/3-yfin-lambda-downloaded
+
+            # Install and configure SAM
+            pip install aws-sam-cli
+            touch /home/ec2-user/status/4-sam-installed
+
+            # Build and deploy
+            cd yfin-api-lambda
             sam build --use-container
-            pytest -v -s tests/integration/test_api.py
+            touch /home/ec2-user/status/5-sam-build-complete
+
             sam deploy --no-confirm-changeset
+            touch /home/ec2-user/status/6-sam-deploy-complete
 
-
-            #yfin agents cdk
-            # Download and extract the CDK application
+            ## Deploiy Agents -  CDK setup
             cd /home/ec2-user
+            touch /home/ec2-user/status/7-cdk-setup-start
             aws s3 cp s3://ws-assets-prod-iad-r-pdx-f3b3f9f1a7d6a3d0/d4acefc0-414b-41e6-981c-56c3da77d760/config/yfin-agents-cdk.zip ./
             unzip yfin-agents-cdk.zip -d yfin-agents-cdk
+            touch /home/ec2-user/status/8-cdk-downloaded
 
-            # Install CDK globally
-            sudo dnf install -y nodejs npm
-            sudo npm install -g aws-cdk
-
-
-            # Navigate to the CDK project directory and deploy
             cd yfin-agents-cdk
             pip install -r requirements.txt
+            touch /home/ec2-user/status/9-cdk-deps-installed
+
+            # Install AWS CDK CLI globally
+            npm install -g aws-cdk
+            touch /home/ec2-user/status/10-cdk-cli-installed
+
             export LAMBDA_ARN=$(aws lambda list-functions --query 'Functions[?contains(FunctionName, `yfin-api-ApiFunction-`)].FunctionArn' --output text)
-            cdk bootstrap 
+            cdk bootstrap
+            touch /home/ec2-user/status/11-cdk-bootstrap-complete
+
             cdk deploy --require-approval never
+            touch /home/ec2-user/status/12-cdk-deploy-complete
+
+
+            ## yfin-supervisor-agent deployment
+            cd /home/ec2-user
+            touch /home/ec2-user/status/13-SuperAgent-setup-start
+            aws s3 cp s3://ws-assets-prod-iad-r-pdx-f3b3f9f1a7d6a3d0/d4acefc0-414b-41e6-981c-56c3da77d760/config/yfin-super-agent.zip ./
+            unzip yfin-super-agent.zip -d yfin-super-agent
+            touch /home/ec2-user/status/8-SuperAgent-downloaded
+
+            cd yfin-super-agent
+            pip install boto3
+
+            ## Download and setup yfin-super-endpoint
+            touch /home/ec2-user/status/2-yfin-lambda-start
+            cd /home/ec2-user
+            aws s3 cp s3://ws-assets-prod-iad-r-pdx-f3b3f9f1a7d6a3d0/d4acefc0-414b-41e6-981c-56c3da77d760/config/yfin-super-endpoint.zip ./
+            unzip yfin-super-endpoint.zip -d yfin-super-endpoint
+            touch /home/ec2-user/status/31-yfin-super-endpoint-downloaded
+
+            # Build and deploy
+            cd yfin-super-endpoint
+            sam build --use-container
+
+            touch /home/ec2-user/status/6-sam-deploy-complete-yfin-super-endpoint
+
+
+
+            EOF
+
+            # Make script executable and run as ec2-user
+            chmod +x /home/ec2-user/setup.sh
+            chown ec2-user:ec2-user /home/ec2-user/setup.sh
+            sudo -u ec2-user /home/ec2-user/setup.sh
+            chmod +x /home/ec2-user/yfin-super-agent/deploy_agent.sh
+            chown ec2-user:ec2-user /home/ec2-user/yfin-super-agent/deploy_agent.sh
+            cd /home/ec2-user/yfin-super-agent
+            sudo -u ec2-user /home/ec2-user/yfin-super-agent/deploy_agent.sh
+            cd /home/ec2-user/yfin-super-endpoint
+            python3 -m venv .yf-agent-env
+            source .yf-agent-env/bin/activate
+            pip install aws-sam-cli
+            . /home/ec2-user/yfin-super-agent/yfin_agent_env.sh
+            sam deploy --no-confirm-changeset --parameter-overrides YfinAgentId=$YFIN_AGENT_ID YfinAgentAliasId=$YFIN_AGENT_ALIAS_ID 
+            touch /home/ec2-user/status/6-sam-deploy-complete-yfin-super-endpoint
+
+            touch /home/ec2-user/status/99-deploy-finished 
+
   EC2SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -1381,13 +1271,6 @@ Outputs:
     Description: The ID of the Aurora VPC
     Value: !Ref WealthMgmtVPC
 
-  AuroraClusterEndpoint:
-    Description: Aurora Serverless Cluster Endpoint
-    Value: !GetAtt AuroraServerlessV2Cluster.Endpoint.Address
-
-  AuroraDBSecretARN:
-    Description: Aurora DB Secret ARN
-    Value: !Ref DBCredentialsSecret
 
   IDCInstanceArn:
     Condition: ShouldCreateIDC
